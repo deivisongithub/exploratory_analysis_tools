@@ -81,7 +81,7 @@ def generateDataFrame(dataset_path, output_path):
     df_min.to_csv(os.path.join(output_path, 'summed_analysis.csv'))
     return df_complete, df_min
 
-# Get Voice duration
+# Get Speech duration
 def calculate_voiced_duration(audio_path, DEVICE, model, utils2):
     model.to(DEVICE)
     (get_speech_timestamps,
