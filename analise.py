@@ -12,16 +12,16 @@ def main():
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
 
-    if not os.path.exists(os.path.join(args.output_path, "csv")):
-        os.makedirs(os.path.join(args.output_path, "csv"))
+    if not os.path.exists(os.path.join(args.output_path, "analysis")):
+        os.makedirs(os.path.join(args.output_path, "analysis"))
 
     if not os.path.exists(os.path.join(args.output_path, "plots")):
         os.makedirs(os.path.join(args.output_path, "plots"))
 
 
-    df, df_min = utils.generateDataFrame(args.dataset_path, os.path.join(args.output_path, "csv"))
+    df, df_min = utils.generateDataFrame(args.dataset_path, os.path.join(args.output_path, "analysis"))
     # print(df.describe())
-    print(df_min.head())
+    # print(df_min.head())
     utils.generatePlots(df, os.path.join(args.output_path, "plots"))
 
 if __name__ == "__main__":
