@@ -12,7 +12,7 @@ import torch
 
 # Generate dataframes complete (used to plot the graphs for analysis) and min (used for the speaker analysis)
 def generateDataFrame(dataset_path, output_path):
-    df_complete = pd.DataFrame(columns=['File Path', 'Speaker', 'Gender', 'Audio', 'Pitch', "Pitch Avg",'Raw Duration', 'Speech Duration','Bpm'])
+    df_complete = pd.DataFrame(columns=['File Path', 'Speaker', 'Gender', 'Audio', 'Pitch', "Pitch Filtered", "Pitch Avg", "Min Pitch", "Max Pitch", 'Raw Duration', 'Speech Duration','Bpm'])
     df_min = pd.DataFrame(columns=['Name', 'Gender', 'Vocal Range', '#F0', 'Lowest Note','Highest Note', 'Total Recorded Hours', 'Speech Recorded Hours'])
 
     # Load silero-vad model
@@ -25,32 +25,44 @@ def generateDataFrame(dataset_path, output_path):
     # Creates a tmp dataframe for a specific speaker, calculates all of it's attributes and concatenates it with the complete dataframe
     # Also does the same for the min dataframe
     for speaker in tqdm(os.listdir(dataset_path)):
-        df_tmp = pd.DataFrame(columns=['File Path', 'Speaker', 'Gender', 'Audio', 'Pitch', "Pitch Avg",'Raw Duration', 'Speech Duration', 'Bpm'])
+        df_tmp = pd.DataFrame(columns=['File Path', 'Speaker', 'Gender', 'Audio', 'Pitch', "Pitch Filtered", "Pitch Avg", "Min Pitch", "Max Pitch", 'Raw Duration', 'Speech Duration', 'Bpm'])
 
         audio_paths = [os.path.join(dataset_path, speaker, fn) for fn in os.listdir(os.path.join(dataset_path, speaker))]
         for audio_path in tqdm(audio_paths):
-            y, sr = librosa.load(audio_path)
-            raw_duration = librosa.get_duration(y=y, sr=sr)
-            speech_duration = calculate_voiced_duration(audio_path, DEVICE, model, utils2)
-            # librosa.yin can also be used for a faster analysis but with more inaccurate results
-            pitch, _, _ = librosa.pyin(y=y, fmin=librosa.note_to_hz('E1'), fmax=librosa.note_to_hz('C7'))
-            bpm, _ = librosa.beat.beat_track(y=y, sr=sr, start_bpm=60, units='time')
-            df_tmp.loc[len(df_tmp)] = {
-                'File Path': audio_path,
-                'Speaker': speaker,
-                'Gender': '-',
-                'Audio': y,
-                'Raw Duration': raw_duration,
-                'Speech Duration': speech_duration,
-                'Bpm': bpm,
-                'Pitch': pitch
-            }
+            try:
+                y, sr = librosa.load(audio_path)
+                raw_duration = librosa.get_duration(y=y, sr=sr)
+                speech_duration = calculate_voiced_duration(audio_path, DEVICE, model, utils2)
+                if speech_duration == 0: # Skips audio files without detected voice
+                   continue
+                # librosa.yin can also be used for a faster analysis but with more inaccurate results
+                pitch, _, _ = librosa.pyin(y=y, fmin=librosa.note_to_hz('E1'), fmax=librosa.note_to_hz('C7'))
+                bpm, _ = librosa.beat.beat_track(y=y, sr=sr, start_bpm=60, units='time')
+                df_tmp.loc[len(df_tmp)] = {
+                    'File Path': audio_path,
+                    'Speaker': speaker,
+                    'Gender': '-',
+                    'Audio': y,
+                    'Raw Duration': raw_duration,
+                    'Speech Duration': speech_duration,
+                    'Bpm': bpm,
+                    'Pitch': pitch
+                }
+            except:
+               print(f"Failed to load {audio_path}")
+               continue
         
         df_tmp["Pitch"] = df_tmp["Pitch"].apply(lambda x: [value for value in x if not math.isnan(value)])
-        df_tmp["Pitch Avg"] = df_tmp["Pitch"].apply(lambda x: np.mean(x))
-        df_tmp["Min Pitch"] = df_tmp["Pitch"].apply(lambda x: get_vocal_range(x)[0])
-        df_tmp["Max Pitch"] = df_tmp["Pitch"].apply(lambda x: get_vocal_range(x)[1])
-        # df_tmp["Speech duration"] = df_tmp["File Path"].apply(calculate_voiced_duration)
+
+        # Removes the rows containing only silence that the vad failed to detect
+        df_tmp.drop(df_tmp.loc[df_tmp["Pitch"].apply(len) == 0].index, inplace=True)
+
+        # Creates as new column to remove outliers
+        df_tmp["Pitch Filtered"] = df_tmp["Pitch"].apply(lambda x: [y for y in x if not (y > np.mean(x) + 2*np.std(x) or y < np.mean(x) - 1.7*np.std(x))])
+
+        df_tmp["Pitch Avg"] = df_tmp["Pitch Filtered"].apply(lambda x: np.mean(x))
+        df_tmp["Min Pitch"] = df_tmp["Pitch Filtered"].apply(min)
+        df_tmp["Max Pitch"] = df_tmp["Pitch Filtered"].apply(max)
 
         # Formats the dataframe to have only 2 decimal cases and show the actual note
         df_min_tmp = pd.DataFrame(columns=['Name', 'Gender', 'Vocal Range', '#F0', 'Lowest Note', 'Highest Note', 'Total Recorded Hours', 'Speech Recorded Hours'])
@@ -66,7 +78,7 @@ def generateDataFrame(dataset_path, output_path):
         df_min_tmp.loc[len(df_min_tmp)] = {
             'Name': speaker,
             'Gender': '-', 
-            'Vocal Range': "-", 
+            'Vocal Range': f"{voical_range_classifier(min_pitch,max_pitch)}",
             '#F0': "{:.2f}".format(mean_f0), 
             'Lowest Note': f"{librosa.hz_to_note(min_pitch)}, {'{:.2f}'.format(min_pitch)}",
             'Highest Note': f"{librosa.hz_to_note(max_pitch)}, {'{:.2f}'.format(max_pitch)}",
@@ -101,19 +113,8 @@ def calculate_voiced_duration(audio_path, DEVICE, model, utils2):
     voiced = sum([t["end"]-t["start"] for t in speech_timestamps])
     return voiced/sample_rate
 
-# Get the vocal range for a specifc audio file (min and max pitch)
-def get_vocal_range(pitch_list):
-  max_pitch = pitch_list[0]
-  min_pitch = pitch_list[0]
-  for pitch_value in pitch_list:
-    if float(pitch_value) < min_pitch:
-      min_pitch = pitch_value
-    if float(pitch_value) > max_pitch:
-      max_pitch = pitch_value
-  return min_pitch, max_pitch
-
 # Classifies the vocal range of the speaker (STILL IN PROGRESS)
-def voical_range_classifier(min_hz, max_hz):
+def voical_range_classifier(min_hz,max_hz):
 
   min_note = int(librosa.hz_to_midi(min_hz))
   max_note = int(librosa.hz_to_midi(max_hz))
@@ -126,37 +127,30 @@ def voical_range_classifier(min_hz, max_hz):
   bass = 0
 
   for note in range(min_note,max_note):
-
-    if note >  81:
-      soprano += 1 #C4 to A5 (60,81)
-
-    if 60 <= note <=  81:
+    if 60 <= note:
       soprano += 1 #C4 to A5 (60,81)
 
     if 57 <= note <=  78:
-      mezzo_soprano += 1    #A3 to F#5 #(57,78)
+      mezzo_soprano += 1	#A3 to F#5 #(57,78)
 
     if 55 <= note <=  76:
-      alto += 1    #G3 to E5 (and contralto as F3-D5) #(55,76)
+      alto += 1	#G3 to E5 (and contralto as F3-D5) #(55,76)
 
     if 48 <= note <=  69:
-      tenor += 1    #roughly C3 to A4 #(48,69)
+      tenor += 1	#roughly C3 to A4 #(48,69)
 
     if 45 <= note <=  65:
-      baritone += 1    #A2 to F4 #(45,65)
+      baritone += 1	#A2 to F4 #(45,65)
 
-    if 41 <= note <=  64:
-      bass += 1    #F2 to E4 #(41,64)
+    if note <=  64:
+      bass += 1	#F2 to E4 #(41,64)
 
-    if note < 41:
-      bass += 1    #F2 to E4 #(41,64)
-
-    dict_classifier = {'soprano': soprano,'mezzo-soprano' : mezzo_soprano,'alto' : alto,'tenor' : tenor,'baritone' : baritone,'bass' : bass}
+    dict_classifier = {'Bass' : bass,'Baritone' : baritone, 'Tenor' : tenor, 'Alto' : alto, 'Mezzo-soprano' : mezzo_soprano, 'Soprano': soprano}
 
     inv = {v: k for k, v in dict_classifier.items()}
     classification = inv[max(inv)]
 
-    return classification
+  return classification
 
 # Generates the plots for the analysis
 def generatePlots(dataframe, output_path):
